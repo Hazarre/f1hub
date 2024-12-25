@@ -1,63 +1,61 @@
-from langchain_community.utilities import SQLDatabase
-db = SQLDatabase.from_uri("sqlite:///Chinook.db")
-# print(db.dialect)
-# print(db.get_usable_table_names())
-# db.run("SELECT * FROM Artist LIMIT 10;")
+from typing import Union
+from fastapi import FastAPI
+
+from src.chat import run_sql, write_query, State, ask
+from sqlmodel import Field, SQLModel, Session, create_engine, select
 
 
-# converts the question into a SQL query;
-# executes the query;
-# uses the result to answer the original question.
+# Database setup
+DATABASE_URL = "sqlite:///./PERM_data/perm_shared.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
-from typing import TypedDict
-# import getpass
-# import os
-# os.environ["OPENAI_API_KEY"] = getpass.getpass()
+# Create the database
+SQLModel.metadata.create_all(engine)
 
-
-from langchain_openai import ChatOpenAI
-llm = ChatOpenAI(model="gpt-4o-mini")
-
-
-from langchain import hub
-query_prompt_template = hub.pull("langchain-ai/sql-query-system-prompt")
-# assert len(query_prompt_template.messages) == 1
-# query_prompt_template.messages[0].pretty_print()
+# Dependency to get the database session
+def get_session():
+    with Session(engine) as session:
+        yield session
 
 
-from typing_extensions import Annotated
+app = FastAPI()
+@app.get("/")
+def read_root():
+    return {"Hello": "You've connected to the api" }
+
+@app.get("/items", response_model=list[Item])
+def read_items(skip: int = Query(0, ge=0), limit: int = Query(10, gt=0), session: Session = Depends(get_session)):
+    """
+    Endpoint to fetch items with pagination.
+
+    Parameters:
+    - skip: Number of records to skip (default: 0)
+    - limit: Maximum number of records to fetch (default: 10)
+    """
+    statement = select(Item).offset(skip).limit(limit)
+    results = session.exec(statement).all()
+    return results 
+
+@app.get("/run_sql/")
+def run():
+    return run_sql("SELECT * FROM y2023 LIMIT 10;")
+
+@app.get("/ask/")
+def ask_text(query_str: str | None = "What are employers with certified rates higher than 90%?" ):
+    state: State = {"question": query_str}
+    executions = ask(state)
+    # {'write_query': {'query': 'SELECT COUNT(DISTINCT case_id) AS total_unique_cases FROM cases;'},
+    # 'execute_query': {'result': 'Error: (sqlite3.OperationalError) no such table: cases\n[SQL: SELECT COUNT(DISTINCT case_id) AS total_unique_cases FROM cases;]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)'},
+    # 'generate_answer': {'answer': "The SQL query attempted to count the total unique cases by selecting distinct `case_id` values from a table called `cases`. However, the query resulted in an error indicating that the table `cases` does not exist in the database.\n\nTherefore, it's not possible to determine the total unique cases due to the absence of the `cases` table. You may need to check if the table exists or if there is a different table name you should be querying."}}
+    return executions['generate_answer']
 
 
-class QueryOutput(TypedDict):
-    """Generated SQL query."""
-    query: Annotated[str, ..., "Syntactically valid SQL query."]
 
 
-def write_query(state):
-    """Generate SQL query to fetch information."""
-    prompt = query_prompt_template.invoke(
-        {
-            "dialect": db.dialect,
-            "top_k": 10,
-            "table_info": db.get_table_info(),
-            "input": state["question"],
-        }
-    )
-    structured_llm = llm.with_structured_output(QueryOutput)
-    result = structured_llm.invoke(prompt)
-    return {"query": result["query"]}
 
 
-# print(write_query({"question": "How many Employees are there?"}))
 
 
-from langchain_community.tools.sql_database.tool import QuerySQLDataBaseTool
-
-
-def execute_query(state):
-    """Execute SQL query."""
-    execute_query_tool = QuerySQLDataBaseTool(db=db)
-    return {"result": execute_query_tool.invoke(state["query"])}
-
-
-print(execute_query({"query": "SELECT COUNT(EmployeeId) AS EmployeeCount FROM Employee;"}))
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()

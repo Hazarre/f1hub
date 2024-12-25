@@ -1,0 +1,5 @@
+fastapi[standard]
+langchain-community
+langchainhub 
+langgraph
+langchain-openai
