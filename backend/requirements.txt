@@ -1,4 +1,5 @@
 fastapi[standard]
+sqlmodel
 langchain-community
 langchainhub 
 langgraph
